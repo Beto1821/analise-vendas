@@ -1,0 +1,18 @@
+
+# Data Files (sensitive/large)
+*.xlsx
+*.xlsb
+*.csv
+sales_analysis_report.txt
+
+# Python
+__pycache__/
+*.pyc
+.env
+.venv
+env/
+venv/
+.DS_Store
+
+# Streamlit
+.streamlit/
