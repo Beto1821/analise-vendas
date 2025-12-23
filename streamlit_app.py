@@ -20,18 +20,17 @@ st.set_page_config(
 # Constantes
 BASE_DIR = "/Users/beto1821uol.com.br/Library/CloudStorage/OneDrive-Personal/Atual/analise grafo"
 
-# Ajuste nos headers: XLSX de 2024 parece ter header na primeira linha (0), não 1
+# CORREÇÃO: 2024 S1 tem header na linha 1 (index 1). Outros parecem ser linha 0.
 FILE_PATTERNS = [
-    {"pattern": "*1º SEMESTRE 2024*.xlsx", "year": 2024, "semester": 1, "engine": "openpyxl", "header_row": 0},
+    {"pattern": "*1º SEMESTRE 2024*.xlsx", "year": 2024, "semester": 1, "engine": "openpyxl", "header_row": 1},
     {"pattern": "*2º SEMESTRE 2024*.xlsb", "year": 2024, "semester": 2, "engine": "pyxlsb", "header_row": 0}, 
     {"pattern": "*1º SEMESTRE 2025*.xlsb", "year": 2025, "semester": 1, "engine": "pyxlsb", "header_row": 0},
     {"pattern": "*2º SEMESTRE 2025*.xlsb", "year": 2025, "semester": 2, "engine": "pyxlsb", "header_row": 0}
 ]
 
 COL_MAPPING = {
-    # REFINAMENTO: Usar APENAS Vencedor
     "VENCEDOR": "Empresa",
-    # "PARCEIRO DE NEGOCIOS": "Empresa", # REMOVIDO POR SOLICITAÇÃO
+    "RAZÃO SOCIAL": "Empresa", # CORREÇÃO: 2024 usa Razão Social
     "MARCA": "Marca",
     "R$ FINAL": "Valor_Unitario",
     "R$ RESMA": "Valor_Unitario",
@@ -77,7 +76,7 @@ def load_data():
             
         try:
             if info["engine"] == "openpyxl":
-                # Proteção para arquivos grandes/read-only se necessário, mas mantendo simples
+                # Check extension roughly
                 xl = pd.ExcelFile(actual_path, engine="openpyxl")
                 sheet_names = xl.sheet_names
             else:
@@ -101,12 +100,14 @@ def load_data():
                 # Rename
                 rename_dict = {}
                 for col in df.columns:
-                    # Proteção extra: Não mapear colunas "Anterior" como Vencedor
-                    if "ANTERIOR" in col and "VENCEDOR" in col:
+                    # Proteção: Ignorar 'Vencedor Ultimo Evento' ou similar
+                    if "ULTIMO EVENTO" in col:
                         continue 
                         
                     for k, v in COL_MAPPING.items():
                         if k in col: 
+                            # Prioridade: Se já mapeou 'Empresa', não sobrescreve fácil, a menos que seja match melhor?
+                            # Simplificação: Primeiro match vence. RAZAO SOCIAL aparece, pega.
                             if v not in rename_dict.values():
                                 rename_dict[col] = v
                                 break
@@ -123,7 +124,7 @@ def load_data():
                     subset_df["Origem"] = filename
                     all_data.append(subset_df)
                 else:
-                    debug_logs.append(f"MISSING COLS in {filename} [{sheet}]")
+                    debug_logs.append(f"MISSING COLS in {filename} [{sheet}]. Found: {df.columns.tolist()}")
                     
         except Exception as e:
             debug_logs.append(f"ERROR reading {filename}: {str(e)}")
@@ -150,8 +151,6 @@ def clean_and_process(df):
             return 0.0
             
     df["Valor_Unitario"] = df["Valor_Unitario"].apply(clean_money)
-    
-    # REFINAMENTO: Filtrar valores zerados
     df = df[df["Valor_Unitario"] > 0]
     
     def clean_vol(val):
@@ -172,7 +171,6 @@ def clean_and_process(df):
     df["Total_Venda"] = df["Valor_Unitario"] * df["Volume"]
     
     # Categorização
-    # REFINAMENTO: Remover nomes de empresa vazios ou nulos (None/NaN)
     df = df[df["Empresa"].notna()]
     df = df[df["Empresa"].astype(str).str.strip() != ""]
     
@@ -193,7 +191,6 @@ def clean_and_process(df):
 def generate_insights(df, df_filtered_my_companies):
     insights = []
     
-    # Total Geral
     total_sales = df["Total_Venda"].sum()
     my_sales = df_filtered_my_companies["Total_Venda"].sum()
     share = (my_sales / total_sales * 100) if total_sales > 0 else 0
@@ -216,7 +213,6 @@ st.title("xC4 Análise de Vendas: RDF & ATUAL vs Mercado")
 # Carga de Dados
 with st.spinner("Carregando planilhas..."):
     raw_df, debug_logs = load_data()
-    # clean_and_process agora aplica os filtros de exclusão
     df = clean_and_process(raw_df)
 
 # Sidebar Debug
@@ -224,10 +220,11 @@ with st.sidebar.expander("Debug Logs", expanded=False):
     for log in debug_logs:
         st.write(log)
     if not df.empty:
-        st.write("Amostra de Categorias:", df["Categoria"].value_counts())
+        st.write("Anos Carregados:", df["Ano"].unique())
+        st.write("Categorias:", df["Categoria"].value_counts())
 
 if df.empty:
-    st.error("Nenhum dado encontrado após filtros.")
+    st.error("Nenhum dado encontrado.")
     st.stop()
 
 # Filtros
@@ -245,11 +242,9 @@ filtered_df = df[
     (df["Mes"].isin(selected_months_nums))
 ]
 
-# Dados Separados
 my_companies_df = filtered_df[filtered_df["Categoria"].isin(["RDF", "ATUAL"])]
 others_df = filtered_df[filtered_df["Categoria"] == "OUTROS"]
 
-# KPIs
 col1, col2, col3 = st.columns(3)
 total_market = filtered_df["Total_Venda"].sum()
 total_mine = my_companies_df["Total_Venda"].sum()
@@ -261,7 +256,6 @@ col3.metric("Vendas Outras Empresas", f"R$ {total_others:,.2f}")
 
 st.divider()
 
-# Insights
 st.subheader("xC9 Insights")
 insights = generate_insights(df, df[(df["Categoria"].isin(["RDF", "ATUAL"]))]) 
 for i in insights:
@@ -269,17 +263,11 @@ for i in insights:
 
 st.divider()
 
-# Visualização
 tab1, tab2, tab3, tab4 = st.tabs(["Comparativo Mensal", "Market Share", "Dados Brutos", "Data Inspector (Debug)"])
 
 with tab1:
     st.markdown("### Evolução Mensal")
-    # Date Fix
-    date_df = filtered_df.assign(
-        year=filtered_df["Ano"], 
-        month=filtered_df["Mes"], 
-        day=1
-    )
+    date_df = filtered_df.assign(year=filtered_df["Ano"], month=filtered_df["Mes"], day=1)
     filtered_df["Data"] = pd.to_datetime(date_df[["year", "month", "day"]])
     
     monthly_cat = filtered_df.groupby(["Data", "Categoria"])["Total_Venda"].sum().reset_index()
@@ -307,13 +295,8 @@ with tab3:
     st.dataframe(filtered_df)
 
 with tab4:
-    st.markdown("### Inspeção de 'Outros'")
-    st.write("Registros classificados como OUTROS:", len(others_df))
-    if not others_df.empty:
-        st.write("Soma de Vendas:", others_df["Total_Venda"].sum())
-        st.dataframe(others_df[["Ano", "Mes", "Empresa", "Valor_Unitario", "Volume", "Total_Venda"]].head(20))
-    else:
-        st.info("Não há registros classificados como OUTROS neste filtro.")
+    st.markdown("### Inspeção de Arquivos")
+    st.write("Anos encontrados:", df["Ano"].value_counts())
+    st.write("Origem dos dados:", df["Origem"].value_counts())
     
-    st.markdown("### Verificação de Colunas")
-    st.write("Colunas no DataFrame final:", df.columns.tolist())
+    st.dataframe(others_df.head(50))
