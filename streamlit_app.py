@@ -29,8 +29,9 @@ FILE_PATTERNS = [
 ]
 
 COL_MAPPING = {
+    # REFINAMENTO: Usar APENAS Vencedor
     "VENCEDOR": "Empresa",
-    "PARCEIRO DE NEGOCIOS": "Empresa",
+    # "PARCEIRO DE NEGOCIOS": "Empresa", # REMOVIDO POR SOLICITAÇÃO
     "MARCA": "Marca",
     "R$ FINAL": "Valor_Unitario",
     "R$ RESMA": "Valor_Unitario",
@@ -76,6 +77,7 @@ def load_data():
             
         try:
             if info["engine"] == "openpyxl":
+                # Proteção para arquivos grandes/read-only se necessário, mas mantendo simples
                 xl = pd.ExcelFile(actual_path, engine="openpyxl")
                 sheet_names = xl.sheet_names
             else:
@@ -149,6 +151,9 @@ def clean_and_process(df):
             
     df["Valor_Unitario"] = df["Valor_Unitario"].apply(clean_money)
     
+    # REFINAMENTO: Filtrar valores zerados
+    df = df[df["Valor_Unitario"] > 0]
+    
     def clean_vol(val):
         if pd.isna(val): return 0.0
         s = str(val).upper().replace(" ", "")
@@ -167,7 +172,11 @@ def clean_and_process(df):
     df["Total_Venda"] = df["Valor_Unitario"] * df["Volume"]
     
     # Categorização
-    df["Empresa_Clean"] = df["Empresa"].astype(str).str.upper().fillna("DESCONHECIDO")
+    # REFINAMENTO: Remover nomes de empresa vazios ou nulos (None/NaN)
+    df = df[df["Empresa"].notna()]
+    df = df[df["Empresa"].astype(str).str.strip() != ""]
+    
+    df["Empresa_Clean"] = df["Empresa"].astype(str).str.upper()
     
     def categorize(name):
         if any(t in name for t in ["RDF", "RD F", "R.D.F"]):
@@ -207,6 +216,7 @@ st.title("xC4 Análise de Vendas: RDF & ATUAL vs Mercado")
 # Carga de Dados
 with st.spinner("Carregando planilhas..."):
     raw_df, debug_logs = load_data()
+    # clean_and_process agora aplica os filtros de exclusão
     df = clean_and_process(raw_df)
 
 # Sidebar Debug
@@ -217,7 +227,7 @@ with st.sidebar.expander("Debug Logs", expanded=False):
         st.write("Amostra de Categorias:", df["Categoria"].value_counts())
 
 if df.empty:
-    st.error("Nenhum dado encontrado.")
+    st.error("Nenhum dado encontrado após filtros.")
     st.stop()
 
 # Filtros
