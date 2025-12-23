@@ -29,7 +29,9 @@ FILE_PATTERNS = [
     {"pattern": "*2º SEMESTRE 2025*.xlsb", "year": 2025, "semester": 2, "engine": "pyxlsb", "header_row": 0}
 ]
 
+# Mapping ajustado: Priorizar chaves especificas
 COL_MAPPING = {
+    # Evitar ambiguidade com "Vencedor Anterior"
     "VENCEDOR": "Empresa",
     "PARCEIRO DE NEGOCIOS": "Empresa",
     "MARCA": "Marca",
@@ -65,7 +67,6 @@ def load_data():
     debug_logs = []
 
     for info in FILE_PATTERNS:
-        # Buscar arquivo real usando glob
         search_path = os.path.join(BASE_DIR, info["pattern"])
         found_files = glob.glob(search_path)
         
@@ -73,14 +74,12 @@ def load_data():
             debug_logs.append(f"ARQUIVO NÃO ENCONTRADO para padrão: {info['pattern']}")
             continue
             
-        # Pega o primeiro match (deve ser único)
         actual_path = found_files[0]
         filename = os.path.basename(actual_path)
         debug_logs.append(f"Carregando: {filename}")
             
         try:
             if info["engine"] == "openpyxl":
-                # Check extension roughly
                 xl = pd.ExcelFile(actual_path, engine="openpyxl")
                 sheet_names = xl.sheet_names
             else:
@@ -100,11 +99,18 @@ def load_data():
                 df.columns = dedup_columns(raw_cols)
                 
                 rename_dict = {}
+                # Melhoria no Mapeamento: Evitar falsos positivos
+                # 1. Identificar colunas alvo
                 for col in df.columns:
+                    # Ignorar colunas "ANTERIOR" ao buscar "VENCEDOR" ou "MARCA" se houver risco
+                    if "ANTERIOR" in col and "VENCEDOR" in col:
+                        continue 
+                        
                     for k, v in COL_MAPPING.items():
                         if k in col: 
                             if v not in rename_dict.values():
                                 rename_dict[col] = v
+                                break # Achou um mapping para esta coluna, para
                 
                 df.rename(columns=rename_dict, inplace=True)
                 
@@ -116,6 +122,8 @@ def load_data():
                     subset_df["Ano"] = info["year"]
                     subset_df["Mes"] = month_num
                     all_data.append(subset_df)
+                else:
+                    debug_logs.append(f"  Aviso: Nenhuma coluna relevante encontrada na aba {sheet}")
                     
         except Exception as e:
             debug_logs.append(f"Erro ao ler {filename}: {str(e)}")
@@ -198,10 +206,13 @@ def generate_insights(df, df_filtered_my_companies):
     # Melhor Mês 2025
     df_2025 = df_filtered_my_companies[df_filtered_my_companies["Ano"] == 2025]
     if not df_2025.empty:
-        best_month_num = df_2025.groupby("Mes")["Total_Venda"].sum().idxmax()
-        best_month_val = df_2025.groupby("Mes")["Total_Venda"].sum().max()
-        best_month_name = month_names.get(best_month_num, str(best_month_num))
-        insights.append(f"**Destaque 2025**: O melhor mês para RDF+ATUAL em 2025 foi **{best_month_name}** com vendas de R$ {best_month_val:,.2f}.")
+        # Sum by month then name
+        month_sum = df_2025.groupby("Mes")["Total_Venda"].sum()
+        if not month_sum.empty:
+            best_month_num = month_sum.idxmax()
+            best_month_val = month_sum.max()
+            best_month_name = month_names.get(best_month_num, str(best_month_num))
+            insights.append(f"**Destaque 2025**: O melhor mês para RDF+ATUAL em 2025 foi **{best_month_name}** com vendas de R$ {best_month_val:,.2f}.")
 
     return insights
 
@@ -219,6 +230,9 @@ with st.spinner("Carregando e processando planilhas..."):
 with st.sidebar.expander("Logs de Carregamento (Debug)"):
     for log in debug_logs:
         st.write(log)
+    if not df.empty:
+        st.write(f"Total Companies Found: {df['Empresa_Clean'].nunique()}")
+        st.write("Top 5 Companies:", df['Empresa_Clean'].value_counts().head(5))
 
 if df.empty:
     st.error("Nenhum dado encontrado. Verifique os 'Logs de Carregamento' na barra lateral para entender o motivo.")
@@ -257,7 +271,7 @@ st.divider()
 
 # --- INSIGHTS AUTOMÁTICOS ---
 st.subheader("xC9 Insights Gerados")
-insights = generate_insights(df, df[(df["Categoria"].isin(["RDF", "ATUAL"]))]) # Insights globais baseados no dataset completo para contexto histórico
+insights = generate_insights(df, df[(df["Categoria"].isin(["RDF", "ATUAL"]))]) 
 for i in insights:
     st.markdown(f"- {i}")
 
@@ -270,9 +284,13 @@ tab1, tab2, tab3 = st.tabs(["Comparativo Mensal", "Market Share", "Dados Brutos"
 with tab1:
     st.markdown("### Evolução de Vendas por Categoria")
     
-    # Group by Year-Month-Category
-    # Create a Date column for better plotting
-    filtered_df["Data"] = pd.to_datetime(filtered_df.assign(Day=1)[["Ano", "Mes", "Day"]])
+    # Fix for create Date Column: Rename columns to match pd.to_datetime expectations (year, month, day)
+    date_df = filtered_df.copy()
+    date_df = date_df.assign(Day=1)
+    # Rename for to_datetime
+    date_df = date_df.rename(columns={"Ano": "year", "Mes": "month", "Day": "day"})
+    
+    filtered_df["Data"] = pd.to_datetime(date_df[["year", "month", "day"]])
     
     monthly_cat = filtered_df.groupby(["Data", "Categoria"])["Total_Venda"].sum().reset_index()
     monthly_cat = monthly_cat.sort_values("Data")
@@ -291,7 +309,6 @@ with tab1:
     st.plotly_chart(fig, use_container_width=True)
     
     st.markdown("### Comparativo Anual (Apenas RDF e ATUAL)")
-    # Pivot to compare 2024 vs 2025 side by side for months
     my_monthly = my_companies_df.groupby(["Mes", "Ano"])["Total_Venda"].sum().reset_index()
     my_monthly["Mes_Nome"] = my_monthly["Mes"].map(month_names)
     
@@ -302,14 +319,13 @@ with tab1:
         color="Ano",
         barmode="group",
         title="RDF+ATUAL: Comparativo Mês a Mês (2024 vs 2025)",
-        category_orders={"Mes_Nome": list(month_names.values())} # Ensure Month Order
+        category_orders={"Mes_Nome": list(month_names.values())} 
     )
     st.plotly_chart(fig2, use_container_width=True)
 
 with tab2:
     st.markdown("### Distribuição de Faturamento")
     
-    # Donut Chart
     total_by_cat = filtered_df.groupby("Categoria")["Total_Venda"].sum().reset_index()
     fig_pie = px.pie(
         total_by_cat,
