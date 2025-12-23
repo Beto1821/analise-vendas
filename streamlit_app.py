@@ -18,7 +18,9 @@ st.set_page_config(
 )
 
 # Constantes
-BASE_DIR = "/Users/beto1821uol.com.br/Library/CloudStorage/OneDrive-Personal/Atual/analise grafo"
+# Constantes
+# BASE_DIR agora é relativo ao local onde o script está rodando (compatível com Deploy)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 FILE_PATTERNS = [
     {"pattern": "*1* SEMESTRE 2024*.xlsx", "year": 2024, "semester": 1, "engine": "openpyxl", "header_row": 1},

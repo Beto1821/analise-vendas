@@ -8,7 +8,7 @@ import traceback
 # Suppress warnings
 warnings.filterwarnings("ignore")
 
-BASE_DIR = "/Users/beto1821uol.com.br/Library/CloudStorage/OneDrive-Personal/Atual/analise grafo"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 FILE_PATTERNS = [
     {"pattern": "*1º SEMESTRE 2024*.xlsx", "year": 2024, "semester": 1, "engine": "openpyxl", "header_row": 1},
