@@ -29,23 +29,7 @@ FILE_PATTERNS = [
 
 # ... existing code ...
 
-if df.empty:
-    st.error("Nenhum dado encontrado após filtros.")
-    
-    st.markdown("### Diagnóstico do Servidor")
-    st.write(f"Caminho Base: `{BASE_DIR}`")
-    
-    try:
-        files_on_server = os.listdir(BASE_DIR)
-        st.write("Arquivos encontrados na pasta:")
-        st.code("\n".join(files_on_server))
-    except Exception as e:
-        st.error(f"Erro ao listar diretório: {e}")
 
-    with st.expander("Logs Detalhados"):
-        for log in debug_logs:
-            st.write(log)
-    st.stop()
 
 # PRIORIDADES DE MAPEAMENTO (Ordem importa!)
 # Lista de tuplas (Campo Destino, [Lista de Candidatos em Ordem de Prioridade])
@@ -333,7 +317,19 @@ with st.sidebar.expander("Debug Logs", expanded=False):
 
 if df.empty:
     st.error("Nenhum dado encontrado após filtros.")
-    st.stop()
+    
+    st.markdown("### Diagnóstico do Servidor")
+    st.write(f"Caminho Base: `{BASE_DIR}`")
+    
+    try:
+        files_on_server = os.listdir(BASE_DIR)
+        st.write("Arquivos encontrados na pasta:")
+        st.code("\n".join(files_on_server))
+    except Exception as e:
+        st.error(f"Erro ao listar diretório: {e}")
+
+    with st.stop():
+        pass
 
 # Filtros
 st.sidebar.header("Filtros")
