@@ -75,27 +75,56 @@ def load_data():
 
     # Helper to find header row dynamically
     def detect_header_row(df_preview):
-        # Keywords to identify the header row
+        # ... (keep existing)
         keywords = ["DATA DO EVENTO", "NRO DO PREGÃO", "VOLUME", "VENCEDOR", "VALOR", "EMPRESA", "PARCEIRO", "R$ FINAL"]
-        
         for i, row in df_preview.iterrows():
             row_vals = [str(x).upper() for x in row.values if pd.notna(x)]
             matches = 0
             for k in keywords:
                 if any(k in val for val in row_vals):
                     matches += 1
-            
-            # If we find enough keywords, assume this is the header
             if matches >= 3:
                 return i
         return 0 # Fallback
 
+    def smart_glob(base_dir, pattern):
+        """
+        Robust file finder that ignores case and encoding differences.
+        Replaces * with wildcard logic.
+        """
+        import unicodedata
+        
+        try:
+            all_files = os.listdir(base_dir)
+        except Exception as e:
+            debug_logs.append(f"Error listing dir {base_dir}: {e}")
+            return []
+            
+        # Normalize pattern for comparison
+        # Remove * for splitting, but keep order
+        # Actually, let's just convert glob pattern to regex for flexibility
+        # Pattern: *1* SEMESTRE 2024*.xlsx
+        # We can just check if all 'essential' parts exist in the right order?
+        # Simpler: Use fnmatch but on lowercased normalized strings
+        
+        import fnmatch
+        
+        matched = []
+        pattern_norm = unicodedata.normalize('NFC', pattern).lower()
+        
+        for f in all_files:
+            f_norm = unicodedata.normalize('NFC', f).lower()
+            if fnmatch.fnmatch(f_norm, pattern_norm):
+                matched.append(os.path.join(base_dir, f))
+        
+        return sorted(matched)
+
     for info in FILE_PATTERNS:
-        search_path = os.path.join(BASE_DIR, info["pattern"])
-        found_files = glob.glob(search_path)
+        # Using smart_glob instead of glob.glob
+        found_files = smart_glob(BASE_DIR, info["pattern"])
         
         if not found_files:
-            debug_logs.append(f"ARQUIVO NÃO ENCONTRADO: {info['pattern']}")
+            debug_logs.append(f"ARQUIVO NÃO ENCONTRADO (Pattern: {info['pattern']})")
             continue
             
         actual_path = found_files[0]
