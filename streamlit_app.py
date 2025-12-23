@@ -38,7 +38,7 @@ COLUMN_PRIORITIES = [
 
 # Termos proibidos em nomes de colunas para certos campos
 BLACKLIST_TERMS = {
-    "Empresa": ["ANTERIOR", "STATUS", "SITUAÇÃO", "RESULTADO", "COLOCAÇÃO"],
+    "Empresa": ["ANTERIOR", "STATUS", "SITUAÇÃO", "RESULTADO", "COLOCAÇÃO", "ULTIMO"],
     "Valor_Unitario": ["ANTERIOR", "ESTIMADO", "DIFERENÇA"]
 }
 
@@ -67,6 +67,23 @@ def load_data():
     all_data = []
     debug_logs = []
 
+    # Helper to find header row dynamically
+    def detect_header_row(df_preview):
+        # Keywords to identify the header row
+        keywords = ["DATA DO EVENTO", "NRO DO PREGÃO", "VOLUME", "VENCEDOR", "VALOR", "EMPRESA", "PARCEIRO", "R$ FINAL"]
+        
+        for i, row in df_preview.iterrows():
+            row_vals = [str(x).upper() for x in row.values if pd.notna(x)]
+            matches = 0
+            for k in keywords:
+                if any(k in val for val in row_vals):
+                    matches += 1
+            
+            # If we find enough keywords, assume this is the header
+            if matches >= 3:
+                return i
+        return 0 # Fallback
+
     for info in FILE_PATTERNS:
         search_path = os.path.join(BASE_DIR, info["pattern"])
         found_files = glob.glob(search_path)
@@ -80,9 +97,11 @@ def load_data():
             
         try:
             if info["engine"] == "openpyxl":
+                # For xlsx in 2024/2025, headers can be inconsistent 
                 xl = pd.ExcelFile(actual_path, engine="openpyxl")
                 sheet_names = xl.sheet_names
             else:
+                 # xlsb
                 xl = pd.ExcelFile(actual_path, engine="pyxlsb")
                 sheet_names = xl.sheet_names
 
@@ -93,8 +112,21 @@ def load_data():
                 if not month_num:
                     continue 
                 
-                df = pd.read_excel(actual_path, sheet_name=sheet, engine=info["engine"], header=info["header_row"])
+                # Step 1: Read valid preview to find header
+                try:
+                    df_preview = pd.read_excel(actual_path, sheet_name=sheet, engine=info["engine"], header=None, nrows=10)
+                    header_idx = detect_header_row(df_preview)
+                except Exception as e:
+                    debug_logs.append(f"Error previewing {filename} [{sheet}]: {e}")
+                    header_idx = info["header_row"] # Fallback to config
                 
+                # Step 2: Read full sheet with detected header
+                try:
+                    df = pd.read_excel(actual_path, sheet_name=sheet, engine=info["engine"], header=header_idx)
+                except Exception as e:
+                     debug_logs.append(f"Error reading {filename} [{sheet}] with header={header_idx}: {e}")
+                     continue
+
                 raw_cols = [str(c).strip().upper() for c in df.columns]
                 df.columns = dedup_columns(raw_cols)
                 
@@ -102,10 +134,23 @@ def load_data():
                 rename_dict = {}
                 found_targets = set()
                 
+                # Status keywords to detect if a column is actually a status column
+                STATUS_KEYWORDS_SET = {"GANHAMOS", "PERDEMOS", "SUSPENSA", "SUSPENSO", "ADIADO", "ADIOU", "CANCELADO", "FRACASSADO", "DESCLASSIFICADO", "NÃO PARTICIPAMOS"}
+
+                def is_status_column(series):
+                     # Check if a significant portion of the non-null values are status keywords
+                     sample = series.dropna().astype(str).str.upper().str.strip()
+                     if sample.empty: return False
+                     
+                     # Check precise matches or partial matches
+                     match_count = sample.apply(lambda x: any(k in x for k in STATUS_KEYWORDS_SET) or x in STATUS_KEYWORDS_SET).sum()
+                     return (match_count / len(sample)) > 0.3 # If >30% looks like status, it's a status column
+
                 for target, candidates in COLUMN_PRIORITIES:
                     # Tenta encontrar o melhor candidato
                     best_match = None
-                    
+                    valid_candidates = []
+
                     for candidate in candidates:
                         # Busca colunas que contêm o termo candidato
                         matches = [c for c in df.columns if candidate in c]
@@ -114,10 +159,39 @@ def load_data():
                         if target in BLACKLIST_TERMS:
                             matches = [c for c in matches if not any(bad in c for bad in BLACKLIST_TERMS[target])]
                         
+                        # Apply content validation for 'Empresa'
+                        if target == "Empresa":
+                             filtered_matches = []
+                             for m in matches:
+                                 if not is_status_column(df[m]):
+                                     filtered_matches.append(m)
+                                 else:
+                                     # Optionally log this rejection?
+                                     pass
+                             matches = filtered_matches
+                        
                         if matches:
-                            # Se houver multiplos matches (ex: "VENCEDOR" e "CNPJ VENCEDOR"), pega o mais curto (mais provável ser o principal)
-                            best_match = min(matches, key=len)
-                            break # Achou um candidato de alta prioridade, para de buscar candidatos piores
+                             valid_candidates.extend(matches)
+                    
+                    if valid_candidates:
+                        # Find the shortest match among all valid candidates found across all candidate keywords
+                        # But we should prioritize the order of candidates (e.g. VENCEDOR > RAZÃO SOCIAL)
+                        # So we take the matches from the *first* candidate keyword that produced valid matches
+                        # Reworking the loop slightly to stop at first HIT
+                        pass 
+
+                    # Re-run logic correctly with early break:
+                    for candidate in candidates:
+                         matches = [c for c in df.columns if candidate in c]
+                         if target in BLACKLIST_TERMS:
+                            matches = [c for c in matches if not any(bad in c for bad in BLACKLIST_TERMS[target])]
+                         
+                         if target == "Empresa":
+                             matches = [m for m in matches if not is_status_column(df[m])]
+                         
+                         if matches:
+                             best_match = min(matches, key=len)
+                             break
                     
                     if best_match:
                         rename_dict[best_match] = target
@@ -135,7 +209,7 @@ def load_data():
                     subset_df["Origem"] = filename
                     all_data.append(subset_df)
                 else:
-                    debug_logs.append(f"MISSING {missing} in {filename} [{sheet}]. Found: {df.columns.tolist()}")
+                    debug_logs.append(f"MISSING {missing} in {filename} [{sheet}] (Header Row: {header_idx}). Found: {df.columns.tolist()}")
                     
         except Exception as e:
             debug_logs.append(f"ERROR reading {filename}: {str(e)}")
