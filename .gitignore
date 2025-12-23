@@ -1,8 +1,9 @@
 
 # Data Files (sensitive/large)
-*.xlsx
-*.xlsb
-*.csv
+# Comentados para permitir upload se o usuário desejar fazer deploy self-contained
+# *.xlsx
+# *.xlsb
+# *.csv
 sales_analysis_report.txt
 
 # Python

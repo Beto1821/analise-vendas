@@ -5,6 +5,7 @@ import os
 import plotly.express as px
 import plotly.graph_objects as go
 import warnings
+import glob
 
 # Suppress warnings
 warnings.filterwarnings("ignore")
@@ -20,11 +21,12 @@ st.set_page_config(
 BASE_DIR = "/Users/beto1821uol.com.br/Library/CloudStorage/OneDrive-Personal/Atual/analise grafo"
 TARGET_COMPANIES = ["RDF", "ATUAL PAPELARIA", "ATUAL", "RD F"] 
 
-FILES_INFO = [
-    {"file": "COBERTURA DE PREÇOS 1º SEMESTRE 2024.xlsx", "year": 2024, "semester": 1, "engine": "openpyxl", "header_row": 1},
-    {"file": "COBERTURA DE PREÇOS 2º SEMESTRE 2024.xlsb", "year": 2024, "semester": 2, "engine": "pyxlsb", "header_row": 0}, 
-    {"file": "COBERTURA DE PREÇOS 1º SEMESTRE 2025.xlsb", "year": 2025, "semester": 1, "engine": "pyxlsb", "header_row": 0},
-    {"file": "COBERTURA DE PREÇOS 2º SEMESTRE 2025.xlsb", "year": 2025, "semester": 2, "engine": "pyxlsb", "header_row": 0}
+# Usando padrões para encontrar arquivos (mais robusto contra Unicode/Espaços)
+FILE_PATTERNS = [
+    {"pattern": "*1º SEMESTRE 2024*.xlsx", "year": 2024, "semester": 1, "engine": "openpyxl", "header_row": 1},
+    {"pattern": "*2º SEMESTRE 2024*.xlsb", "year": 2024, "semester": 2, "engine": "pyxlsb", "header_row": 0}, 
+    {"pattern": "*1º SEMESTRE 2025*.xlsb", "year": 2025, "semester": 1, "engine": "pyxlsb", "header_row": 0},
+    {"pattern": "*2º SEMESTRE 2025*.xlsb", "year": 2025, "semester": 2, "engine": "pyxlsb", "header_row": 0}
 ]
 
 COL_MAPPING = {
@@ -60,18 +62,29 @@ def dedup_columns(columns):
 @st.cache_data
 def load_data():
     all_data = []
+    debug_logs = []
 
-    for info in FILES_INFO:
-        path = os.path.join(BASE_DIR, info["file"])
-        if not os.path.exists(path):
+    for info in FILE_PATTERNS:
+        # Buscar arquivo real usando glob
+        search_path = os.path.join(BASE_DIR, info["pattern"])
+        found_files = glob.glob(search_path)
+        
+        if not found_files:
+            debug_logs.append(f"ARQUIVO NÃO ENCONTRADO para padrão: {info['pattern']}")
             continue
+            
+        # Pega o primeiro match (deve ser único)
+        actual_path = found_files[0]
+        filename = os.path.basename(actual_path)
+        debug_logs.append(f"Carregando: {filename}")
             
         try:
             if info["engine"] == "openpyxl":
-                xl = pd.ExcelFile(path, engine="openpyxl")
+                # Check extension roughly
+                xl = pd.ExcelFile(actual_path, engine="openpyxl")
                 sheet_names = xl.sheet_names
             else:
-                xl = pd.ExcelFile(path, engine="pyxlsb")
+                xl = pd.ExcelFile(actual_path, engine="pyxlsb")
                 sheet_names = xl.sheet_names
 
             for sheet in sheet_names:
@@ -81,7 +94,7 @@ def load_data():
                 if not month_num:
                     continue 
                 
-                df = pd.read_excel(path, sheet_name=sheet, engine=info["engine"], header=info["header_row"])
+                df = pd.read_excel(actual_path, sheet_name=sheet, engine=info["engine"], header=info["header_row"])
                 
                 raw_cols = [str(c).strip().upper() for c in df.columns]
                 df.columns = dedup_columns(raw_cols)
@@ -105,13 +118,13 @@ def load_data():
                     all_data.append(subset_df)
                     
         except Exception as e:
-            st.error(f"Erro ao ler {info['file']}: {e}")
+            debug_logs.append(f"Erro ao ler {filename}: {str(e)}")
 
     if not all_data:
-        return pd.DataFrame() 
+        return pd.DataFrame(), debug_logs
 
     full_df = pd.concat(all_data, ignore_index=True)
-    return full_df
+    return full_df, debug_logs
 
 @st.cache_data
 def clean_and_process(df):
@@ -199,11 +212,16 @@ st.markdown("Comparativo detalhado de performance 2024 vs 2025.")
 
 # Carga de Dados
 with st.spinner("Carregando e processando planilhas..."):
-    raw_df = load_data()
+    raw_df, debug_logs = load_data()
     df = clean_and_process(raw_df)
 
+# Sidebar Debug Logs
+with st.sidebar.expander("Logs de Carregamento (Debug)"):
+    for log in debug_logs:
+        st.write(log)
+
 if df.empty:
-    st.warning("Nenhum dado encontrado. Verifique os arquivos na pasta.")
+    st.error("Nenhum dado encontrado. Verifique os 'Logs de Carregamento' na barra lateral para entender o motivo.")
     st.stop()
 
 # Filtros Sidebar
@@ -320,4 +338,3 @@ with tab2:
 with tab3:
     st.markdown("### Detalhamento dos Dados")
     st.dataframe(filtered_df[["Ano", "Mes", "Empresa", "Categoria", "Valor_Unitario", "Volume", "Total_Venda"]].sort_values(["Ano", "Mes"]))
-
