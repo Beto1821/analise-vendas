@@ -20,7 +20,6 @@ st.set_page_config(
 # Constantes
 BASE_DIR = "/Users/beto1821uol.com.br/Library/CloudStorage/OneDrive-Personal/Atual/analise grafo"
 
-# CORREÇÃO: 2024 S1 tem header na linha 1 (index 1). Outros parecem ser linha 0.
 FILE_PATTERNS = [
     {"pattern": "*1º SEMESTRE 2024*.xlsx", "year": 2024, "semester": 1, "engine": "openpyxl", "header_row": 1},
     {"pattern": "*2º SEMESTRE 2024*.xlsb", "year": 2024, "semester": 2, "engine": "pyxlsb", "header_row": 0}, 
@@ -28,14 +27,19 @@ FILE_PATTERNS = [
     {"pattern": "*2º SEMESTRE 2025*.xlsb", "year": 2025, "semester": 2, "engine": "pyxlsb", "header_row": 0}
 ]
 
-COL_MAPPING = {
-    "VENCEDOR": "Empresa",
-    "RAZÃO SOCIAL": "Empresa", # CORREÇÃO: 2024 usa Razão Social
-    "MARCA": "Marca",
-    "R$ FINAL": "Valor_Unitario",
-    "R$ RESMA": "Valor_Unitario",
-    "VOLUME (RESMAS)": "Volume",
-    "QUANTIDADE": "Volume"
+# PRIORIDADES DE MAPEAMENTO (Ordem importa!)
+# Lista de tuplas (Campo Destino, [Lista de Candidatos em Ordem de Prioridade])
+COLUMN_PRIORITIES = [
+    ("Valor_Unitario", ["R$ FINAL", "R$ RESMA", "R$ TOTAL", "VALOR"]),
+    ("Empresa", ["VENCEDOR", "RAZÃO SOCIAL", "PARCEIRO", "FORNECEDOR"]),
+    ("Marca", ["MARCA"]),
+    ("Volume", ["VOLUME (RESMAS)", "VOLUME", "QUANTIDADE", "QTD"])
+]
+
+# Termos proibidos em nomes de colunas para certos campos
+BLACKLIST_TERMS = {
+    "Empresa": ["ANTERIOR", "STATUS", "SITUAÇÃO", "RESULTADO", "COLOCAÇÃO"],
+    "Valor_Unitario": ["ANTERIOR", "ESTIMADO", "DIFERENÇA"]
 }
 
 months_lookup = {
@@ -76,7 +80,6 @@ def load_data():
             
         try:
             if info["engine"] == "openpyxl":
-                # Check extension roughly
                 xl = pd.ExcelFile(actual_path, engine="openpyxl")
                 sheet_names = xl.sheet_names
             else:
@@ -90,41 +93,49 @@ def load_data():
                 if not month_num:
                     continue 
                 
-                # Ler dados
                 df = pd.read_excel(actual_path, sheet_name=sheet, engine=info["engine"], header=info["header_row"])
                 
-                # Dedup colunas
                 raw_cols = [str(c).strip().upper() for c in df.columns]
                 df.columns = dedup_columns(raw_cols)
                 
-                # Rename
+                # --- LOGICA DE MAPEAMENTO POR PRIORIDADE ---
                 rename_dict = {}
-                for col in df.columns:
-                    # Proteção: Ignorar 'Vencedor Ultimo Evento' ou similar
-                    if "ULTIMO EVENTO" in col:
-                        continue 
+                found_targets = set()
+                
+                for target, candidates in COLUMN_PRIORITIES:
+                    # Tenta encontrar o melhor candidato
+                    best_match = None
+                    
+                    for candidate in candidates:
+                        # Busca colunas que contêm o termo candidato
+                        matches = [c for c in df.columns if candidate in c]
                         
-                    for k, v in COL_MAPPING.items():
-                        if k in col: 
-                            # Prioridade: Se já mapeou 'Empresa', não sobrescreve fácil, a menos que seja match melhor?
-                            # Simplificação: Primeiro match vence. RAZAO SOCIAL aparece, pega.
-                            if v not in rename_dict.values():
-                                rename_dict[col] = v
-                                break
+                        # Filtrar blacklist
+                        if target in BLACKLIST_TERMS:
+                            matches = [c for c in matches if not any(bad in c for bad in BLACKLIST_TERMS[target])]
+                        
+                        if matches:
+                            # Se houver multiplos matches (ex: "VENCEDOR" e "CNPJ VENCEDOR"), pega o mais curto (mais provável ser o principal)
+                            best_match = min(matches, key=len)
+                            break # Achou um candidato de alta prioridade, para de buscar candidatos piores
+                    
+                    if best_match:
+                        rename_dict[best_match] = target
+                        found_targets.add(target)
                 
                 df.rename(columns=rename_dict, inplace=True)
                 
-                cols_to_keep = ["Empresa", "Marca", "Valor_Unitario", "Volume"]
-                final_cols_in_df = [c for c in cols_to_keep if c in df.columns]
-                
-                if final_cols_in_df:
-                    subset_df = df[final_cols_in_df].copy()
+                # Validation
+                missing = [t[0] for t in COLUMN_PRIORITIES if t[0] not in found_targets]
+                if not missing:
+                    cols_to_keep = ["Empresa", "Marca", "Valor_Unitario", "Volume"]
+                    subset_df = df[cols_to_keep].copy()
                     subset_df["Ano"] = info["year"]
                     subset_df["Mes"] = month_num
                     subset_df["Origem"] = filename
                     all_data.append(subset_df)
                 else:
-                    debug_logs.append(f"MISSING COLS in {filename} [{sheet}]. Found: {df.columns.tolist()}")
+                    debug_logs.append(f"MISSING {missing} in {filename} [{sheet}]. Found: {df.columns.tolist()}")
                     
         except Exception as e:
             debug_logs.append(f"ERROR reading {filename}: {str(e)}")
@@ -139,7 +150,6 @@ def load_data():
 def clean_and_process(df):
     if df.empty: return df
         
-    # Limpeza de Valores
     def clean_money(val):
         if pd.isna(val): return 0.0
         s = str(val).upper().replace("R$", "").replace(" ", "")
@@ -175,6 +185,10 @@ def clean_and_process(df):
     df = df[df["Empresa"].astype(str).str.strip() != ""]
     
     df["Empresa_Clean"] = df["Empresa"].astype(str).str.upper()
+    
+    # Filtro Extra: Remover nomes de empresa que parecem status ("GANHAMOS", "PERDEMOS") caso tenha passado
+    status_keywords = ["GANHAMOS", "PERDEMOS", "DESCLASSIFICADO", "FRACASSADO"]
+    df = df[~df["Empresa_Clean"].isin(status_keywords)]
     
     def categorize(name):
         if any(t in name for t in ["RDF", "RD F", "R.D.F"]):
@@ -213,6 +227,7 @@ st.title("xC4 Análise de Vendas: RDF & ATUAL vs Mercado")
 # Carga de Dados
 with st.spinner("Carregando planilhas..."):
     raw_df, debug_logs = load_data()
+    # clean_and_process agora aplica os filtros de exclusão
     df = clean_and_process(raw_df)
 
 # Sidebar Debug
@@ -220,11 +235,10 @@ with st.sidebar.expander("Debug Logs", expanded=False):
     for log in debug_logs:
         st.write(log)
     if not df.empty:
-        st.write("Anos Carregados:", df["Ano"].unique())
-        st.write("Categorias:", df["Categoria"].value_counts())
+        st.write("Amostra de Categorias:", df["Categoria"].value_counts())
 
 if df.empty:
-    st.error("Nenhum dado encontrado.")
+    st.error("Nenhum dado encontrado após filtros.")
     st.stop()
 
 # Filtros
@@ -298,5 +312,5 @@ with tab4:
     st.markdown("### Inspeção de Arquivos")
     st.write("Anos encontrados:", df["Ano"].value_counts())
     st.write("Origem dos dados:", df["Origem"].value_counts())
-    
+    st.write("Columns in df:", df.columns.tolist())
     st.dataframe(others_df.head(50))
