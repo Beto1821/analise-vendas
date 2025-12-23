@@ -19,19 +19,16 @@ st.set_page_config(
 
 # Constantes
 BASE_DIR = "/Users/beto1821uol.com.br/Library/CloudStorage/OneDrive-Personal/Atual/analise grafo"
-TARGET_COMPANIES = ["RDF", "ATUAL PAPELARIA", "ATUAL", "RD F"] 
 
-# Usando padrões para encontrar arquivos (mais robusto contra Unicode/Espaços)
+# Ajuste nos headers: XLSX de 2024 parece ter header na primeira linha (0), não 1
 FILE_PATTERNS = [
-    {"pattern": "*1º SEMESTRE 2024*.xlsx", "year": 2024, "semester": 1, "engine": "openpyxl", "header_row": 1},
+    {"pattern": "*1º SEMESTRE 2024*.xlsx", "year": 2024, "semester": 1, "engine": "openpyxl", "header_row": 0},
     {"pattern": "*2º SEMESTRE 2024*.xlsb", "year": 2024, "semester": 2, "engine": "pyxlsb", "header_row": 0}, 
     {"pattern": "*1º SEMESTRE 2025*.xlsb", "year": 2025, "semester": 1, "engine": "pyxlsb", "header_row": 0},
     {"pattern": "*2º SEMESTRE 2025*.xlsb", "year": 2025, "semester": 2, "engine": "pyxlsb", "header_row": 0}
 ]
 
-# Mapping ajustado: Priorizar chaves especificas
 COL_MAPPING = {
-    # Evitar ambiguidade com "Vencedor Anterior"
     "VENCEDOR": "Empresa",
     "PARCEIRO DE NEGOCIOS": "Empresa",
     "MARCA": "Marca",
@@ -71,12 +68,11 @@ def load_data():
         found_files = glob.glob(search_path)
         
         if not found_files:
-            debug_logs.append(f"ARQUIVO NÃO ENCONTRADO para padrão: {info['pattern']}")
+            debug_logs.append(f"ARQUIVO NÃO ENCONTRADO: {info['pattern']}")
             continue
             
         actual_path = found_files[0]
         filename = os.path.basename(actual_path)
-        debug_logs.append(f"Carregando: {filename}")
             
         try:
             if info["engine"] == "openpyxl":
@@ -93,16 +89,17 @@ def load_data():
                 if not month_num:
                     continue 
                 
+                # Ler dados
                 df = pd.read_excel(actual_path, sheet_name=sheet, engine=info["engine"], header=info["header_row"])
                 
+                # Dedup colunas
                 raw_cols = [str(c).strip().upper() for c in df.columns]
                 df.columns = dedup_columns(raw_cols)
                 
+                # Rename
                 rename_dict = {}
-                # Melhoria no Mapeamento: Evitar falsos positivos
-                # 1. Identificar colunas alvo
                 for col in df.columns:
-                    # Ignorar colunas "ANTERIOR" ao buscar "VENCEDOR" ou "MARCA" se houver risco
+                    # Proteção extra: Não mapear colunas "Anterior" como Vencedor
                     if "ANTERIOR" in col and "VENCEDOR" in col:
                         continue 
                         
@@ -110,7 +107,7 @@ def load_data():
                         if k in col: 
                             if v not in rename_dict.values():
                                 rename_dict[col] = v
-                                break # Achou um mapping para esta coluna, para
+                                break
                 
                 df.rename(columns=rename_dict, inplace=True)
                 
@@ -121,12 +118,13 @@ def load_data():
                     subset_df = df[final_cols_in_df].copy()
                     subset_df["Ano"] = info["year"]
                     subset_df["Mes"] = month_num
+                    subset_df["Origem"] = filename
                     all_data.append(subset_df)
                 else:
-                    debug_logs.append(f"  Aviso: Nenhuma coluna relevante encontrada na aba {sheet}")
+                    debug_logs.append(f"MISSING COLS in {filename} [{sheet}]")
                     
         except Exception as e:
-            debug_logs.append(f"Erro ao ler {filename}: {str(e)}")
+            debug_logs.append(f"ERROR reading {filename}: {str(e)}")
 
     if not all_data:
         return pd.DataFrame(), debug_logs
@@ -168,7 +166,7 @@ def clean_and_process(df):
         
     df["Total_Venda"] = df["Valor_Unitario"] * df["Volume"]
     
-    # Categorização de Empresas
+    # Categorização
     df["Empresa_Clean"] = df["Empresa"].astype(str).str.upper().fillna("DESCONHECIDO")
     
     def categorize(name):
@@ -193,52 +191,36 @@ def generate_insights(df, df_filtered_my_companies):
     
     insights.append(f"**Market Share Global**: As empresas RDF e ATUAL representam **{share:.2f}%** do faturamento total analisado (R$ {total_sales:,.2f}).")
     
-    # Crescimento 2024 vs 2025 (Minhas Empresas)
     sales_by_year = df_filtered_my_companies.groupby("Ano")["Total_Venda"].sum()
     if 2024 in sales_by_year and 2025 in sales_by_year:
         growth = ((sales_by_year[2025] - sales_by_year[2024]) / sales_by_year[2024]) * 100
         trend = "CRESCIMENTO" if growth > 0 else "QUEDA"
         emoji = "xC4" if growth > 0 else "xCE"
-        insights.append(f"**Comparativo Anual (RDF+ATUAL)**: Houve um(a) {emoji} **{trend} de {growth:.1f}%** em 2025 comparado a 2024 (considerando os meses disponíveis).")
-        insights.append(f"- 2024: R$ {sales_by_year[2024]:,.2f}")
-        insights.append(f"- 2025: R$ {sales_by_year[2025]:,.2f}")
+        insights.append(f"**Comparativo Anual (RDF+ATUAL)**: Houve um(a) {emoji} **{trend} de {growth:.1f}%** em 2025 comparado a 2024.")
     
-    # Melhor Mês 2025
-    df_2025 = df_filtered_my_companies[df_filtered_my_companies["Ano"] == 2025]
-    if not df_2025.empty:
-        # Sum by month then name
-        month_sum = df_2025.groupby("Mes")["Total_Venda"].sum()
-        if not month_sum.empty:
-            best_month_num = month_sum.idxmax()
-            best_month_val = month_sum.max()
-            best_month_name = month_names.get(best_month_num, str(best_month_num))
-            insights.append(f"**Destaque 2025**: O melhor mês para RDF+ATUAL em 2025 foi **{best_month_name}** com vendas de R$ {best_month_val:,.2f}.")
-
     return insights
 
 # --- MAIN APP ---
 
 st.title("xC4 Análise de Vendas: RDF & ATUAL vs Mercado")
-st.markdown("Comparativo detalhado de performance 2024 vs 2025.")
 
 # Carga de Dados
-with st.spinner("Carregando e processando planilhas..."):
+with st.spinner("Carregando planilhas..."):
     raw_df, debug_logs = load_data()
     df = clean_and_process(raw_df)
 
-# Sidebar Debug Logs
-with st.sidebar.expander("Logs de Carregamento (Debug)"):
+# Sidebar Debug
+with st.sidebar.expander("Debug Logs", expanded=False):
     for log in debug_logs:
         st.write(log)
     if not df.empty:
-        st.write(f"Total Companies Found: {df['Empresa_Clean'].nunique()}")
-        st.write("Top 5 Companies:", df['Empresa_Clean'].value_counts().head(5))
+        st.write("Amostra de Categorias:", df["Categoria"].value_counts())
 
 if df.empty:
-    st.error("Nenhum dado encontrado. Verifique os 'Logs de Carregamento' na barra lateral para entender o motivo.")
+    st.error("Nenhum dado encontrado.")
     st.stop()
 
-# Filtros Sidebar
+# Filtros
 st.sidebar.header("Filtros")
 selected_years = st.sidebar.multiselect("Anos", options=sorted(df["Ano"].unique()), default=sorted(df["Ano"].unique()))
 selected_months_nums = st.sidebar.multiselect(
@@ -253,104 +235,75 @@ filtered_df = df[
     (df["Mes"].isin(selected_months_nums))
 ]
 
-# Separar Dados
+# Dados Separados
 my_companies_df = filtered_df[filtered_df["Categoria"].isin(["RDF", "ATUAL"])]
 others_df = filtered_df[filtered_df["Categoria"] == "OUTROS"]
 
-# --- KPIS ---
+# KPIs
 col1, col2, col3 = st.columns(3)
 total_market = filtered_df["Total_Venda"].sum()
 total_mine = my_companies_df["Total_Venda"].sum()
 total_others = others_df["Total_Venda"].sum()
 
-col1.metric("Vendas Totais do Mercado", f"R$ {total_market:,.2f}")
+col1.metric("Vendas Totais", f"R$ {total_market:,.2f}")
 col2.metric("Vendas RDF + ATUAL", f"R$ {total_mine:,.2f}", delta=f"{(total_mine/total_market)*100:.1f}% Share" if total_market else 0)
 col3.metric("Vendas Outras Empresas", f"R$ {total_others:,.2f}")
 
 st.divider()
 
-# --- INSIGHTS AUTOMÁTICOS ---
-st.subheader("xC9 Insights Gerados")
+# Insights
+st.subheader("xC9 Insights")
 insights = generate_insights(df, df[(df["Categoria"].isin(["RDF", "ATUAL"]))]) 
 for i in insights:
     st.markdown(f"- {i}")
 
 st.divider()
 
-# --- VISUALIZAÇÕES ---
-
-tab1, tab2, tab3 = st.tabs(["Comparativo Mensal", "Market Share", "Dados Brutos"])
+# Visualização
+tab1, tab2, tab3, tab4 = st.tabs(["Comparativo Mensal", "Market Share", "Dados Brutos", "Data Inspector (Debug)"])
 
 with tab1:
-    st.markdown("### Evolução de Vendas por Categoria")
-    
-    # Fix for create Date Column: Rename columns to match pd.to_datetime expectations (year, month, day)
-    date_df = filtered_df.copy()
-    date_df = date_df.assign(Day=1)
-    # Rename for to_datetime
-    date_df = date_df.rename(columns={"Ano": "year", "Mes": "month", "Day": "day"})
-    
+    st.markdown("### Evolução Mensal")
+    # Date Fix
+    date_df = filtered_df.assign(
+        year=filtered_df["Ano"], 
+        month=filtered_df["Mes"], 
+        day=1
+    )
     filtered_df["Data"] = pd.to_datetime(date_df[["year", "month", "day"]])
     
     monthly_cat = filtered_df.groupby(["Data", "Categoria"])["Total_Venda"].sum().reset_index()
     monthly_cat = monthly_cat.sort_values("Data")
     
     fig = px.bar(
-        monthly_cat, 
-        x="Data", 
-        y="Total_Venda", 
-        color="Categoria", 
-        title="Vendas Mensais por Categoria (Comparativo)",
-        labels={"Total_Venda": "Valor (R$)", "Categoria": "Empresa"},
-        color_discrete_map={"RDF": "#1f77b4", "ATUAL": "#ff7f0e", "OUTROS": "#d62728"},
-        barmode='stack'
+        monthly_cat, x="Data", y="Total_Venda", color="Categoria",
+        title="Vendas Mensais por Categoria",
+        color_discrete_map={"RDF": "#1f77b4", "ATUAL": "#ff7f0e", "OUTROS": "#d62728"}
     )
-    fig.update_layout(xaxis_tickformat="%b %Y")
     st.plotly_chart(fig, use_container_width=True)
-    
-    st.markdown("### Comparativo Anual (Apenas RDF e ATUAL)")
-    my_monthly = my_companies_df.groupby(["Mes", "Ano"])["Total_Venda"].sum().reset_index()
-    my_monthly["Mes_Nome"] = my_monthly["Mes"].map(month_names)
-    
-    fig2 = px.bar(
-        my_monthly,
-        x="Mes_Nome",
-        y="Total_Venda",
-        color="Ano",
-        barmode="group",
-        title="RDF+ATUAL: Comparativo Mês a Mês (2024 vs 2025)",
-        category_orders={"Mes_Nome": list(month_names.values())} 
-    )
-    st.plotly_chart(fig2, use_container_width=True)
 
 with tab2:
-    st.markdown("### Distribuição de Faturamento")
-    
+    st.markdown("### Participação")
     total_by_cat = filtered_df.groupby("Categoria")["Total_Venda"].sum().reset_index()
     fig_pie = px.pie(
-        total_by_cat,
-        values="Total_Venda",
-        names="Categoria",
-        title="Participação no Período Selecionado",
+        total_by_cat, values="Total_Venda", names="Categoria", 
         color="Categoria",
         color_discrete_map={"RDF": "#1f77b4", "ATUAL": "#ff7f0e", "OUTROS": "#d62728"},
         hole=0.4
     )
     st.plotly_chart(fig_pie, use_container_width=True)
-    
-    st.markdown("### Top 10 'Outras Empresas'")
-    top_others = others_df.groupby("Empresa_Clean")["Total_Venda"].sum().nlargest(10).reset_index()
-    fig_bar_others = px.bar(
-        top_others,
-        x="Total_Venda",
-        y="Empresa_Clean",
-        orientation='h',
-        title="Maiores Concorrentes (Outros)",
-        text_auto='.2s'
-    )
-    fig_bar_others.update_layout(yaxis={'categoryorder':'total ascending'})
-    st.plotly_chart(fig_bar_others, use_container_width=True)
 
 with tab3:
-    st.markdown("### Detalhamento dos Dados")
-    st.dataframe(filtered_df[["Ano", "Mes", "Empresa", "Categoria", "Valor_Unitario", "Volume", "Total_Venda"]].sort_values(["Ano", "Mes"]))
+    st.dataframe(filtered_df)
+
+with tab4:
+    st.markdown("### Inspeção de 'Outros'")
+    st.write("Registros classificados como OUTROS:", len(others_df))
+    if not others_df.empty:
+        st.write("Soma de Vendas:", others_df["Total_Venda"].sum())
+        st.dataframe(others_df[["Ano", "Mes", "Empresa", "Valor_Unitario", "Volume", "Total_Venda"]].head(20))
+    else:
+        st.info("Não há registros classificados como OUTROS neste filtro.")
+    
+    st.markdown("### Verificação de Colunas")
+    st.write("Colunas no DataFrame final:", df.columns.tolist())
