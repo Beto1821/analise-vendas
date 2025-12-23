@@ -21,11 +21,31 @@ st.set_page_config(
 BASE_DIR = "/Users/beto1821uol.com.br/Library/CloudStorage/OneDrive-Personal/Atual/analise grafo"
 
 FILE_PATTERNS = [
-    {"pattern": "*1º SEMESTRE 2024*.xlsx", "year": 2024, "semester": 1, "engine": "openpyxl", "header_row": 1},
-    {"pattern": "*2º SEMESTRE 2024*.xlsb", "year": 2024, "semester": 2, "engine": "pyxlsb", "header_row": 0}, 
-    {"pattern": "*1º SEMESTRE 2025*.xlsb", "year": 2025, "semester": 1, "engine": "pyxlsb", "header_row": 0},
-    {"pattern": "*2º SEMESTRE 2025*.xlsb", "year": 2025, "semester": 2, "engine": "pyxlsb", "header_row": 0}
+    {"pattern": "*1* SEMESTRE 2024*.xlsx", "year": 2024, "semester": 1, "engine": "openpyxl", "header_row": 1},
+    {"pattern": "*2* SEMESTRE 2024*.xlsb", "year": 2024, "semester": 2, "engine": "pyxlsb", "header_row": 0}, 
+    {"pattern": "*1* SEMESTRE 2025*.xlsb", "year": 2025, "semester": 1, "engine": "pyxlsb", "header_row": 0},
+    {"pattern": "*2* SEMESTRE 2025*.xlsb", "year": 2025, "semester": 2, "engine": "pyxlsb", "header_row": 0}
 ]
+
+# ... existing code ...
+
+if df.empty:
+    st.error("Nenhum dado encontrado após filtros.")
+    
+    st.markdown("### Diagnóstico do Servidor")
+    st.write(f"Caminho Base: `{BASE_DIR}`")
+    
+    try:
+        files_on_server = os.listdir(BASE_DIR)
+        st.write("Arquivos encontrados na pasta:")
+        st.code("\n".join(files_on_server))
+    except Exception as e:
+        st.error(f"Erro ao listar diretório: {e}")
+
+    with st.expander("Logs Detalhados"):
+        for log in debug_logs:
+            st.write(log)
+    st.stop()
 
 # PRIORIDADES DE MAPEAMENTO (Ordem importa!)
 # Lista de tuplas (Campo Destino, [Lista de Candidatos em Ordem de Prioridade])
